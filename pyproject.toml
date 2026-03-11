@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text-to-garmin-workout"
+version = "0.1.0"
+description = "CLI tool to convert natural language workout descriptions into Garmin Connect workouts"
+requires-python = ">=3.10"
+dependencies = [
+    "github-copilot-sdk",
+    "garminconnect>=0.2.30",
+    "pydantic>=2.0",
+    "rich",
+]
+
+[project.scripts]
+text-to-garmin = "text_to_garmin.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
