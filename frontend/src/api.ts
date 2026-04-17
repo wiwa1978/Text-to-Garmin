@@ -163,10 +163,7 @@ export interface WorkoutActionResponse {
 
 export interface AuthStatus {
   authenticated: boolean;
-  username?: string;
-  avatar?: string | null;
   dev_mode?: boolean;
-  error?: string;
 }
 
 export const api = {
@@ -175,12 +172,19 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     });
     if (res.status === 401) return { authenticated: false };
-    if (res.status === 403) {
-      const body = await res.json().catch(() => ({}));
-      return { authenticated: false, error: body.error };
-    }
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return (await res.json()) as AuthStatus;
+  },
+
+  login: async (password: string): Promise<boolean> => {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (res.status === 204) return true;
+    if (res.status === 401) return false;
+    throw new Error(`${res.status}: ${await res.text()}`);
   },
 
   logout: () => fetch("/api/auth/logout", { method: "POST" }),

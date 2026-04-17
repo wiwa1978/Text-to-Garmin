@@ -14,19 +14,13 @@ param location string = resourceGroup().location
 param copilotGithubToken string = ''
 
 // ---------------------------------------------------------------------------
-// GitHub OAuth (required if you want to protect the app with a sign-in).
-// Leave all four empty to run completely open — only recommended if the app
-// is not reachable from the public internet.
+// Shared-password authentication.
+// Leave appPassword empty to run without auth (only recommended if the app
+// is not reachable from the public internet).
 // ---------------------------------------------------------------------------
-@description('GitHub OAuth App client id. Empty disables sign-in (app is open to anyone who finds the URL).')
-param githubOauthClientId string = ''
-
-@description('GitHub OAuth App client secret. Required if githubOauthClientId is set.')
+@description('Shared password for the web UI. Everyone who visits the URL must type it. Empty disables auth.')
 @secure()
-param githubOauthClientSecret string = ''
-
-@description('Comma-separated list of GitHub usernames allowed to sign in (e.g. "alice,bob"). Required if githubOauthClientId is set.')
-param allowedGithubUsers string = ''
+param appPassword string = ''
 
 @description('Signing secret for session cookies (>=32 random chars). Leave empty to auto-generate a stable value.')
 @secure()
@@ -209,7 +203,7 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 // Container App
 // ---------------------------------------------------------------------------
 var hasCopilotToken = !empty(copilotGithubToken)
-var hasGithubOauth = !empty(githubOauthClientId)
+var hasPassword = !empty(appPassword)
 var effectiveSessionSecret = empty(appSessionSecret) ? uniqueString(subscription().id, resourceGroup().id, environmentName, 'session') : appSessionSecret
 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -245,10 +239,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             value: copilotGithubToken
           }
         ] : [],
-        hasGithubOauth ? [
+        hasPassword ? [
           {
-            name: 'github-oauth-client-secret'
-            value: githubOauthClientSecret
+            name: 'app-password'
+            value: appPassword
           }
           {
             name: 'app-session-secret'
@@ -292,26 +286,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                 secretRef: 'copilot-github-token'
               }
             ] : [],
-            hasGithubOauth ? [
+            hasPassword ? [
               {
-                name: 'GITHUB_OAUTH_CLIENT_ID'
-                value: githubOauthClientId
-              }
-              {
-                name: 'GITHUB_OAUTH_CLIENT_SECRET'
-                secretRef: 'github-oauth-client-secret'
-              }
-              {
-                name: 'ALLOWED_GITHUB_USERS'
-                value: allowedGithubUsers
+                name: 'APP_PASSWORD'
+                secretRef: 'app-password'
               }
               {
                 name: 'APP_SESSION_SECRET'
                 secretRef: 'app-session-secret'
-              }
-              {
-                name: 'APP_BASE_URL'
-                value: 'https://${names.containerApp}.${containerAppsEnv.properties.defaultDomain}'
               }
             ] : []
           )

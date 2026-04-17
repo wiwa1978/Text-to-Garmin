@@ -11,14 +11,8 @@
     "copilotGithubToken": {
       "value": "${COPILOT_GITHUB_TOKEN=}"
     },
-    "githubOauthClientId": {
-      "value": "${GITHUB_OAUTH_CLIENT_ID=}"
-    },
-    "githubOauthClientSecret": {
-      "value": "${GITHUB_OAUTH_CLIENT_SECRET=}"
-    },
-    "allowedGithubUsers": {
-      "value": "${ALLOWED_GITHUB_USERS=}"
+    "appPassword": {
+      "value": "${APP_PASSWORD=}"
     },
     "appSessionSecret": {
       "value": "${APP_SESSION_SECRET=}"
