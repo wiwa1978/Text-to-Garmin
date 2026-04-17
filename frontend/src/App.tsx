@@ -330,7 +330,16 @@ export function App() {
   }
 
   if (!auth.authenticated) {
-    return <LoginScreen error={auth.error} />;
+    return (
+      <LoginScreen
+        onSuccess={() => {
+          api
+            .getAuthStatus()
+            .then(setAuth)
+            .catch((e) => setSetupError(String(e)));
+        }}
+      />
+    );
   }
 
   if (setup === null) {
@@ -357,11 +366,8 @@ export function App() {
             to Garmin Connect.
           </p>
         </div>
-        {auth.username && !auth.dev_mode && (
+        {!auth.dev_mode && (
           <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
-            <span>
-              Signed in as <strong>{auth.username}</strong>
-            </span>
             <Button
               variant="ghost"
               size="sm"
