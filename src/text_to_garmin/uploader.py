@@ -14,6 +14,29 @@ from .auth import get_garmin_client
 console = Console()
 
 
+def upload_workout_with_client(
+    client,
+    workout: Workout,
+    schedule_date: datetime | None = None,
+) -> dict:
+    """
+    Upload a workout using a pre-authenticated Garmin client.
+
+    Raises exceptions from the underlying client on failure (the caller is
+    responsible for translating them). This is the web-safe variant.
+    """
+    garmin_json = build_garmin_workout(workout)
+    result = client.upload_workout(garmin_json)
+
+    if schedule_date and isinstance(result, dict):
+        workout_id = result.get("workoutId")
+        if workout_id:
+            date_str = schedule_date.strftime("%Y-%m-%d")
+            client.schedule_workout(workout_id, date_str)
+
+    return result
+
+
 def upload_workout(
     workout: Workout,
     schedule_date: datetime | None = None,
@@ -73,3 +96,38 @@ def save_workout_json(workout: Workout, path: str = "workout.json") -> str:
         json.dump(garmin_json, f, indent=2)
     console.print(f"[green]💾 Workout saved to {path}[/green]")
     return path
+
+
+def list_workouts_with_client(client, limit: int = 20) -> list[dict]:
+    """Return the user's most recent Garmin Connect workouts.
+
+    The raw garminconnect response is a list of dicts with a stable-ish
+    shape; we pass through the useful keys plus a flattened ``sport_type``.
+    """
+    raw = client.get_workouts(0, max(1, min(limit, 100))) or []
+    out: list[dict] = []
+    for w in raw:
+        if not isinstance(w, dict):
+            continue
+        sport = w.get("sportType") or {}
+        sport_key = (
+            sport.get("sportTypeKey") if isinstance(sport, dict) else None
+        ) or w.get("sportTypeKey")
+        out.append(
+            {
+                "workout_id": w.get("workoutId"),
+                "name": w.get("workoutName") or "(unnamed)",
+                "description": w.get("description"),
+                "sport_type": sport_key,
+                "estimated_duration_s": w.get("estimatedDurationInSecs"),
+                "estimated_distance_m": w.get("estimatedDistanceInMeters"),
+                "created_date": w.get("createdDate"),
+                "updated_date": w.get("updatedDate"),
+            }
+        )
+    return out
+
+
+def delete_workout_with_client(client, workout_id: int | str) -> None:
+    """Delete a workout from Garmin Connect."""
+    client.delete_workout(workout_id)

@@ -24,23 +24,46 @@ TOKEN_DIR = Path(
 LEGACY_TOKEN_DIR = Path.home() / ".text-to-garmin" / ".gauth"
 
 
+class GarminAuthRequiredError(RuntimeError):
+    """Raised in non-interactive mode when credentials are missing."""
+
+
+class GarminAuthFailedError(RuntimeError):
+    """Raised when Garmin login fails (bad creds, MFA, rate limit, etc.)."""
+
+
 def _get_credentials(
-    email: str | None = None, password: str | None = None
+    email: str | None = None,
+    password: str | None = None,
+    *,
+    interactive: bool = True,
 ) -> tuple[str, str]:
     """Resolve credentials from args, env vars, or interactive prompt."""
     email = email or os.environ.get("GARMIN_EMAIL")
     password = password or os.environ.get("GARMIN_PASSWORD")
 
-    if not email:
-        email = input("Garmin Connect email: ")
-    if not password:
-        password = getpass("Garmin Connect password: ")
+    if not email or not password:
+        if not interactive:
+            raise GarminAuthRequiredError(
+                "Garmin credentials not available. Set GARMIN_EMAIL/GARMIN_PASSWORD "
+                "or run the CLI once to cache login tokens."
+            )
+        if not email:
+            email = input("Garmin Connect email: ")
+        if not password:
+            password = getpass("Garmin Connect password: ")
 
     return email, password
 
 
 def _prompt_mfa_code() -> str:
     return input("Garmin Connect MFA code: ").strip()
+
+
+def _noninteractive_mfa_code() -> str:
+    raise GarminAuthRequiredError(
+        "Garmin account requires MFA. Run the CLI once to complete MFA and cache tokens."
+    )
 
 
 def _resolve_tokenstore() -> Path:
@@ -63,13 +86,59 @@ def _format_auth_error(exc: Exception) -> str:
     return f"Login failed: {exc}"
 
 
-def authenticate(email: str | None = None, password: str | None = None) -> Garmin:
+def authenticate(
+    email: str | None = None,
+    password: str | None = None,
+    *,
+    interactive: bool = True,
+) -> Garmin:
     """
     Authenticate with Garmin Connect using native garminconnect token handling.
     Reuses cached tokens when available and falls back to credential login.
+
+    When ``interactive=False`` this function will never call ``input()`` /
+    ``getpass()``. If cached tokens are missing/expired and no env-var
+    credentials are provided, it raises :class:`GarminAuthRequiredError`.
+    On other auth/connection failures it raises :class:`GarminAuthFailedError`.
     """
-    email, password = _get_credentials(email, password)
     tokenstore = _resolve_tokenstore()
+
+    # In non-interactive mode, try a tokens-only login first so we never need creds.
+    if not interactive:
+        if tokenstore.exists():
+            client = Garmin(prompt_mfa=_noninteractive_mfa_code)
+            try:
+                client.login(str(tokenstore))
+                return client
+            except (
+                GarminConnectAuthenticationError,
+                GarminConnectConnectionError,
+                GarminConnectTooManyRequestsError,
+            ):
+                # Fall through to credential-based login below.
+                pass
+
+        try:
+            email, password = _get_credentials(email, password, interactive=False)
+        except GarminAuthRequiredError:
+            raise
+
+        client = Garmin(
+            email=email, password=password, prompt_mfa=_noninteractive_mfa_code
+        )
+        try:
+            tokenstore.parent.mkdir(parents=True, exist_ok=True)
+            client.login(str(tokenstore))
+        except (
+            GarminConnectAuthenticationError,
+            GarminConnectConnectionError,
+            GarminConnectTooManyRequestsError,
+        ) as exc:
+            raise GarminAuthFailedError(_format_auth_error(exc)) from exc
+        return client
+
+    # Interactive (CLI) path — preserves previous behavior.
+    email, password = _get_credentials(email, password, interactive=True)
     client = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa_code)
 
     try:
@@ -88,8 +157,8 @@ def authenticate(email: str | None = None, password: str | None = None) -> Garmi
     return client
 
 
-def get_garmin_client() -> Garmin:
+def get_garmin_client(*, interactive: bool = True) -> Garmin:
     """
     Get an authenticated Garmin Connect client.
     """
-    return authenticate()
+    return authenticate(interactive=interactive)

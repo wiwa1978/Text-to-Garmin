@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -8,7 +9,45 @@ build/
 *.egg
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment / secrets
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Persisted app state (holds the Copilot PAT + Garmin session tokens)
+.text-to-garmin/
+garmin_tokens.json
+oauth*.json
+
+# Auth caches from external tools
 .gauth/
-*.fit
 .copilot/
+
+# Workout exports
+*.fit
+
+# Azure Developer CLI (also has its own .azure/.gitignore)
+.azure/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Bicep build artifacts
+infra/main.json
+infra/*.json.tmp
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

@@ -1,0 +1,46 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Python
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+build
+dist
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Frontend build artifacts (rebuilt inside the image)
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# Tests / docs / dev tooling not needed in the image
+tests
+docs
+*.md
+!README.md
+
+# Local secrets / state — never bake into the image
+.env
+.env.*
+*.pem
+garmin_tokens.json
+.text-to-garmin
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Azure / infra (built separately, not needed inside container)
+.azure
+infra
+azure.yaml

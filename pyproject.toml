@@ -14,6 +14,12 @@ dependencies = [
     "rich",
 ]
 
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+
 [project.scripts]
 text-to-garmin = "text_to_garmin.cli:main"
 
