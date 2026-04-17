@@ -435,5 +435,155 @@ class RecentWorkoutsApiTests(unittest.TestCase):
         self.assertEqual(body["workout_id"], 42)
 
 
+class AuthTests(unittest.TestCase):
+    """Tests for the GitHub OAuth middleware and endpoints."""
+
+    _VARS = (
+        "GITHUB_OAUTH_CLIENT_ID",
+        "GITHUB_OAUTH_CLIENT_SECRET",
+        "ALLOWED_GITHUB_USERS",
+        "APP_BASE_URL",
+        "APP_SESSION_SECRET",
+    )
+
+    def setUp(self) -> None:
+        # Ensure auth is fresh for each test by reading env at call time.
+        for var in self._VARS:
+            os.environ.pop(var, None)
+
+    def tearDown(self) -> None:
+        # Don't leak auth env vars into sibling test classes — the middleware
+        # reads os.environ on every request.
+        for var in self._VARS:
+            os.environ.pop(var, None)
+
+    def _with_auth_env(self):
+        os.environ["GITHUB_OAUTH_CLIENT_ID"] = "test-client-id"
+        os.environ["GITHUB_OAUTH_CLIENT_SECRET"] = "test-secret"
+        os.environ["ALLOWED_GITHUB_USERS"] = "alice,bob"
+        os.environ["APP_SESSION_SECRET"] = "x" * 48
+        os.environ["APP_BASE_URL"] = "http://testserver"
+
+    def test_dev_mode_allows_unauthenticated_api_calls(self) -> None:
+        # GITHUB_OAUTH_CLIENT_ID is unset (cleared in setUp)
+        with TestClient(webapi.app) as client:
+            r = client.get("/api/health")
+            self.assertEqual(r.status_code, 200)
+            me = client.get("/api/auth/me")
+            self.assertEqual(me.status_code, 200)
+            self.assertTrue(me.json().get("dev_mode"))
+
+    def test_auth_enabled_rejects_unauthenticated_api_calls(self) -> None:
+        self._with_auth_env()
+        with TestClient(webapi.app) as client:
+            r = client.post("/api/drafts", json={"description": "x"})
+            self.assertEqual(r.status_code, 401)
+            body = r.json()
+            self.assertFalse(body["authenticated"])
+
+    def test_auth_enabled_health_still_public(self) -> None:
+        self._with_auth_env()
+        with TestClient(webapi.app) as client:
+            r = client.get("/api/health")
+            self.assertEqual(r.status_code, 200)
+
+    def test_login_redirects_to_github_with_state(self) -> None:
+        self._with_auth_env()
+        with TestClient(webapi.app) as client:
+            r = client.get("/api/auth/login", follow_redirects=False)
+            self.assertEqual(r.status_code, 302)
+            loc = r.headers["location"]
+            self.assertTrue(loc.startswith("https://github.com/login/oauth/authorize"))
+            self.assertIn("client_id=test-client-id", loc)
+            self.assertIn(
+                "redirect_uri=http%3A%2F%2Ftestserver%2Fapi%2Fauth%2Fcallback", loc
+            )
+            self.assertIn("state=", loc)
+
+    def test_callback_rejects_non_allowlisted_user(self) -> None:
+        self._with_auth_env()
+        with TestClient(webapi.app) as client:
+            # Kick off login to populate session state.
+            r = client.get("/api/auth/login", follow_redirects=False)
+            loc = r.headers["location"]
+            state = _qs(loc, "state")
+
+            with (
+                patch(
+                    "text_to_garmin.web_auth._exchange_code",
+                    new=_async_return("fake-token"),
+                ),
+                patch(
+                    "text_to_garmin.web_auth._fetch_user",
+                    new=_async_return(("mallory", None)),
+                ),
+            ):
+                cb = client.get(
+                    f"/api/auth/callback?code=abc&state={state}",
+                    follow_redirects=False,
+                )
+            self.assertEqual(cb.status_code, 403)
+            # User was not stored in session
+            me = client.get("/api/auth/me")
+            self.assertEqual(me.status_code, 401)
+
+    def test_callback_logs_in_allowlisted_user(self) -> None:
+        self._with_auth_env()
+        with TestClient(webapi.app) as client:
+            r = client.get("/api/auth/login", follow_redirects=False)
+            state = _qs(r.headers["location"], "state")
+
+            with (
+                patch(
+                    "text_to_garmin.web_auth._exchange_code",
+                    new=_async_return("fake-token"),
+                ),
+                patch(
+                    "text_to_garmin.web_auth._fetch_user",
+                    new=_async_return(("alice", "https://example.com/a.png")),
+                ),
+            ):
+                cb = client.get(
+                    f"/api/auth/callback?code=abc&state={state}",
+                    follow_redirects=False,
+                )
+            self.assertEqual(cb.status_code, 302)
+            self.assertEqual(cb.headers["location"], "/")
+
+            me = client.get("/api/auth/me")
+            self.assertEqual(me.status_code, 200)
+            self.assertEqual(me.json()["username"], "alice")
+
+            # Logout clears the session.
+            out = client.post("/api/auth/logout")
+            self.assertEqual(out.status_code, 204)
+            me2 = client.get("/api/auth/me")
+            self.assertEqual(me2.status_code, 401)
+
+    def test_callback_rejects_bad_state(self) -> None:
+        self._with_auth_env()
+        with TestClient(webapi.app) as client:
+            client.get("/api/auth/login", follow_redirects=False)
+            cb = client.get(
+                "/api/auth/callback?code=abc&state=tampered",
+                follow_redirects=False,
+            )
+            self.assertEqual(cb.status_code, 400)
+
+
+def _qs(url: str, key: str) -> str:
+    from urllib.parse import parse_qs, urlparse
+
+    q = parse_qs(urlparse(url).query)
+    return q[key][0]
+
+
+def _async_return(value):
+    async def _f(*args, **kwargs):
+        return value
+
+    return _f
+
+
 if __name__ == "__main__":
     unittest.main()

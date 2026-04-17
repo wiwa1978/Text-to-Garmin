@@ -65,6 +65,7 @@ from .uploader import (
     list_workouts_with_client,
     upload_workout_with_client,
 )
+from .web_auth import install_auth
 from .web_schemas import (
     AcceptRequest,
     CreateDraftRequest,
@@ -102,6 +103,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+install_auth(app)
 
 
 def _draft_response_from(draft: Draft, outcome: ParseOutcome) -> DraftResponse:
