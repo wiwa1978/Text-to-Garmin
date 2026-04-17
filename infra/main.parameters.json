@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "copilotGithubToken": {
+      "value": "${COPILOT_GITHUB_TOKEN=}"
+    },
+    "containerRegistryName": {
+      "value": "${AZURE_CONTAINER_REGISTRY_NAME=}"
+    },
+    "containerAppName": {
+      "value": "${AZURE_CONTAINER_APP_NAME=}"
+    },
+    "containerAppsEnvironmentName": {
+      "value": "${AZURE_CONTAINER_APPS_ENVIRONMENT_NAME=}"
+    },
+    "logAnalyticsWorkspaceName": {
+      "value": "${AZURE_LOG_ANALYTICS_NAME=}"
+    },
+    "managedIdentityName": {
+      "value": "${AZURE_MANAGED_IDENTITY_NAME=}"
+    },
+    "storageAccountName": {
+      "value": "${AZURE_STORAGE_ACCOUNT_NAME=}"
+    },
+    "fileShareName": {
+      "value": "${AZURE_FILE_SHARE_NAME=data}"
+    },
+    "containerCpu": {
+      "value": "${CONTAINER_CPU=0.5}"
+    },
+    "containerMemory": {
+      "value": "${CONTAINER_MEMORY=1Gi}"
+    },
+    "minReplicas": {
+      "value": "${CONTAINER_MIN_REPLICAS=0}"
+    },
+    "maxReplicas": {
+      "value": "${CONTAINER_MAX_REPLICAS=1}"
+    }
+  }
+}

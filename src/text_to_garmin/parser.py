@@ -6,10 +6,26 @@ import asyncio
 import json
 import os
 import re
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Optional
 
 from rich.console import Console
 
 from .models import Workout
+
+
+@dataclass
+class ClarificationNeeded:
+    """Returned by web-safe parser methods when the LLM asks a question."""
+
+    question: str
+
+
+ParseOutcome = Workout | ClarificationNeeded
+
+# Callback invoked with progress events during a parse. Each event has
+# at least a "stage" key. Shape is intentionally open-ended.
+EventCb = Optional[Callable[[dict], Awaitable[None]]]
 
 console = Console()
 
@@ -36,6 +52,13 @@ IMPORTANT RULES:
 4. Distance values are in METERS for distance type (e.g., 1km = 1000, 400m = 400).
 5. For rest-until-lap-button, encode as {"type": "rest", "duration_type": "lap_button", "duration": null}.
 6. When the workout is fully specified, output ONLY a JSON code block with no other text.
+
+NAMING:
+- If the user explicitly provided a workout name in the prompt, use it verbatim.
+- Otherwise, generate a concise descriptive title (max ~40 chars) summarizing the
+  workout. Prefer the main set. Examples: "5km easy", "5x1km @ 5k pace",
+  "Hill repeats 4x2min", "Threshold 3x10min", "Tempo 20min", "Long run 90min".
+  Do NOT use the generic placeholder "Workout".
 
 Output schema:
 {
@@ -65,6 +88,27 @@ MAX_TURNS = 10
 MAX_VALIDATION_RETRIES = 3
 DEFAULT_MODEL = os.environ.get("TEXT_TO_GARMIN_MODEL")
 
+# A name is treated as "not provided" (→ auto-generate) when it's empty or
+# equals our CLI default placeholder.
+_AUTO_NAME_SENTINELS = {"", "workout"}
+
+
+def _is_auto_name(workout_name: str | None) -> bool:
+    return (workout_name or "").strip().lower() in _AUTO_NAME_SENTINELS
+
+
+def _build_initial_prompt(description: str, workout_name: str) -> str:
+    if _is_auto_name(workout_name):
+        return (
+            "Parse this workout into JSON. Generate a concise descriptive "
+            "name for the workout (max ~40 chars) based on its contents — "
+            'do NOT use the placeholder "Workout".\n\n'
+            f"{description}"
+        )
+    return (
+        f'Parse this workout into JSON. Workout name: "{workout_name}"\n\n{description}'
+    )
+
 
 def _extract_json(text: str) -> str | None:
     """Extract JSON from a ```json ... ``` code block."""
@@ -86,9 +130,13 @@ def _stringify_response_content(content) -> str:
     return str(content)
 
 
-async def _collect_response(session, prompt: str) -> str:
+async def _collect_response(session, prompt: str, on_event: EventCb = None) -> str:
     """Send a prompt and return the final assistant response text."""
+    if on_event is not None:
+        await on_event({"stage": "sending_prompt", "prompt_chars": len(prompt)})
     response_event = await session.send_and_wait(prompt, timeout=120.0)
+    if on_event is not None:
+        await on_event({"stage": "received_response"})
     if response_event is None:
         return ""
     return _stringify_response_content(getattr(response_event.data, "content", None))
@@ -138,13 +186,71 @@ async def _parse_response_to_workout(
     raise RuntimeError(f"Workout parsing did not complete within {MAX_TURNS} turns.")
 
 
+async def _advance_web(
+    session,
+    response: str,
+    workout_name: str,
+    on_event: EventCb = None,
+) -> ParseOutcome:
+    """Web-safe equivalent of _parse_response_to_workout.
+
+    Runs the validation-retry loop but, when the LLM asks a clarifying
+    question instead of emitting JSON, returns a :class:`ClarificationNeeded`
+    so the caller can surface the question to the user and resume later.
+    """
+    validation_retries = 0
+
+    while True:
+        if on_event is not None:
+            await on_event({"stage": "validating"})
+        json_str = _extract_json(response)
+
+        if json_str is None:
+            if on_event is not None:
+                await on_event({"stage": "clarification_needed"})
+            return ClarificationNeeded(question=response.strip())
+
+        try:
+            data = json.loads(json_str)
+            data.setdefault("name", workout_name)
+            workout = Workout.model_validate(data)
+            if on_event is not None:
+                await on_event({"stage": "workout_ready"})
+            return workout
+        except (json.JSONDecodeError, Exception) as exc:
+            validation_retries += 1
+            if on_event is not None:
+                await on_event(
+                    {
+                        "stage": "validation_failed",
+                        "attempt": validation_retries,
+                        "max_attempts": MAX_VALIDATION_RETRIES,
+                        "error": str(exc),
+                    }
+                )
+            if validation_retries > MAX_VALIDATION_RETRIES:
+                raise RuntimeError(
+                    f"Failed to parse workout after "
+                    f"{MAX_VALIDATION_RETRIES} validation retries. "
+                    f"Last error: {exc}"
+                ) from exc
+            response = await _collect_response(
+                session,
+                f"The JSON you produced has a validation error: {exc}\n"
+                f"Please fix the JSON and output it again.",
+                on_event=on_event,
+            )
+
+
 class WorkoutParserSession:
     """Manages a Copilot session for parsing and revising workouts."""
 
-    def __init__(self):
+    def __init__(self, model: Optional[str] = None):
         self._client = None
         self._session = None
         self._workout_name: str = "Workout"
+        # Explicit override wins; otherwise fall back to the env default.
+        self._model: Optional[str] = model or DEFAULT_MODEL
 
     async def __aenter__(self):
         try:
@@ -169,8 +275,8 @@ class WorkoutParserSession:
             "on_permission_request": PermissionHandler.approve_all,
             "system_message": {"content": SYSTEM_MESSAGE},
         }
-        if DEFAULT_MODEL:
-            session_kwargs["model"] = DEFAULT_MODEL
+        if self._model:
+            session_kwargs["model"] = self._model
 
         self._session = await self._client.create_session(**session_kwargs)
         return self
@@ -184,10 +290,7 @@ class WorkoutParserSession:
     async def parse(self, description: str, workout_name: str = "Workout") -> Workout:
         """Parse a workout description. Same logic as standalone parse_workout."""
         self._workout_name = workout_name
-        initial_prompt = (
-            f"Parse this workout into JSON. "
-            f'Workout name: "{workout_name}"\n\n{description}'
-        )
+        initial_prompt = _build_initial_prompt(description, workout_name)
         response = await _collect_response(self._session, initial_prompt)
         return await _parse_response_to_workout(
             self._session,
@@ -209,6 +312,48 @@ class WorkoutParserSession:
             self._workout_name,
         )
 
+    # ------------------------------------------------------------------
+    # Web-safe (non-interactive) flow
+    # ------------------------------------------------------------------
+    async def parse_web(
+        self,
+        description: str,
+        workout_name: str = "Workout",
+        on_event: EventCb = None,
+    ) -> ParseOutcome:
+        """Non-interactive parse: returns either a Workout or ClarificationNeeded."""
+        self._workout_name = workout_name
+        if on_event is not None:
+            await on_event({"stage": "preparing_prompt"})
+        initial_prompt = _build_initial_prompt(description, workout_name)
+        response = await _collect_response(
+            self._session, initial_prompt, on_event=on_event
+        )
+        return await _advance_web(
+            self._session, response, workout_name, on_event=on_event
+        )
+
+    async def reply_web(
+        self, user_reply: str, on_event: EventCb = None
+    ) -> ParseOutcome:
+        """Continue a paused parse by sending the user's answer to a clarification."""
+        response = await _collect_response(self._session, user_reply, on_event=on_event)
+        return await _advance_web(
+            self._session, response, self._workout_name, on_event=on_event
+        )
+
+    async def revise_web(self, feedback: str, on_event: EventCb = None) -> ParseOutcome:
+        """Non-interactive revise: returns either a Workout or ClarificationNeeded."""
+        prompt = (
+            f"The user wants to change the workout. Here is their feedback:\n\n"
+            f"{feedback}\n\n"
+            f"Please output the revised workout as a JSON code block."
+        )
+        response = await _collect_response(self._session, prompt, on_event=on_event)
+        return await _advance_web(
+            self._session, response, self._workout_name, on_event=on_event
+        )
+
 
 async def parse_workout(
     description: str,
@@ -221,3 +366,64 @@ async def parse_workout(
     """
     async with WorkoutParserSession() as session:
         return await session.parse(description, workout_name)
+
+
+@dataclass
+class ModelOption:
+    """Minimal, serialisable model descriptor for the web UI."""
+
+    id: str
+    name: str
+    billing_multiplier: float | None = None
+
+
+async def list_available_models() -> list[ModelOption]:
+    """Query the Copilot SDK for the list of models the user can use.
+
+    Starts a short-lived :class:`CopilotClient` to fetch the list. Returns
+    an empty list if the SDK is unavailable.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+
+    try:
+        from copilot import CopilotClient
+    except ImportError:
+        log.warning("copilot SDK not importable; returning no models")
+        return []
+
+    client = CopilotClient()
+    try:
+        await client.start()
+        raw = await client.list_models()
+    except Exception:
+        log.exception("list_models failed")
+        return []
+    finally:
+        try:
+            await client.stop()
+        except Exception:
+            pass
+
+    log.info("copilot list_models returned %d entries", len(raw or []))
+    options: list[ModelOption] = []
+    for m in raw or []:
+        mid = getattr(m, "id", None)
+        if not mid:
+            continue
+        billing = getattr(m, "billing", None)
+        multiplier = getattr(billing, "multiplier", None) if billing else None
+        options.append(
+            ModelOption(
+                id=mid,
+                name=getattr(m, "name", mid),
+                billing_multiplier=multiplier,
+            )
+        )
+    log.info(
+        "returning %d models to UI: %s",
+        len(options),
+        ", ".join(o.id for o in options) or "(none)",
+    )
+    return options
