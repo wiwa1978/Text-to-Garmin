@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+
 from rich.console import Console
-import garth
+
 from .models import Workout
 from .builder import build_garmin_workout
 from .auth import get_garmin_client
@@ -44,14 +45,19 @@ def upload_workout(
             if workout_id:
                 try:
                     date_str = schedule_date.strftime("%Y-%m-%d")
-                    endpoint = f"/workout-service/schedule/{workout_id}"
-                    garth.connectapi(endpoint, method="POST", json={"date": date_str})
+                    client.schedule_workout(workout_id, date_str)
                     console.print(f"[green]📅 Workout scheduled for {date_str}[/green]")
                 except Exception as exc:
-                    console.print(f"[yellow]⚠️  Upload succeeded but scheduling failed: {exc}[/yellow]")
-                    console.print("[dim]You can manually schedule it at https://connect.garmin.com/modern/workouts[/dim]")
+                    console.print(
+                        f"[yellow]⚠️  Upload succeeded but scheduling failed: {exc}[/yellow]"
+                    )
+                    console.print(
+                        "[dim]You can manually schedule it at https://connect.garmin.com/modern/workouts[/dim]"
+                    )
             else:
-                console.print("[yellow]⚠️  Could not extract workout ID for scheduling.[/yellow]")
+                console.print(
+                    "[yellow]⚠️  Could not extract workout ID for scheduling.[/yellow]"
+                )
 
         console.print("[dim]View at: https://connect.garmin.com/modern/workouts[/dim]")
         return result

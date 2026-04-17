@@ -6,13 +6,22 @@ import os
 from getpass import getpass
 from pathlib import Path
 
-import garth
 from garminconnect import Garmin
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 from rich.console import Console
 
 console = Console()
 
-TOKEN_DIR = Path.home() / ".text-to-garmin" / ".gauth"
+TOKEN_DIR = Path(
+    os.environ.get(
+        "GARMINTOKENS", str(Path.home() / ".garminconnect" / "garmin_tokens.json")
+    )
+).expanduser()
+LEGACY_TOKEN_DIR = Path.home() / ".text-to-garmin" / ".gauth"
 
 
 def _get_credentials(
@@ -30,57 +39,57 @@ def _get_credentials(
     return email, password
 
 
-def _try_resume() -> bool:
-    """Try to resume a saved session. Returns True on success."""
-    if not TOKEN_DIR.exists():
-        return False
-    try:
-        garth.resume(str(TOKEN_DIR))
-        _ = garth.client.username
-        return True
-    except Exception:
-        return False
+def _prompt_mfa_code() -> str:
+    return input("Garmin Connect MFA code: ").strip()
 
 
-def authenticate(
-    email: str | None = None, password: str | None = None
-) -> garth.Client:
+def _resolve_tokenstore() -> Path:
+    if TOKEN_DIR.exists() or not LEGACY_TOKEN_DIR.exists():
+        return TOKEN_DIR
+    return LEGACY_TOKEN_DIR
+
+
+def _format_auth_error(exc: Exception) -> str:
+    if isinstance(exc, GarminConnectTooManyRequestsError):
+        return (
+            "Garmin login is being blocked or rate-limited by Garmin/Cloudflare. "
+            "This is a server-side auth challenge, not just a local cooldown. "
+            f"If login succeeds once, tokens will be cached in {_resolve_tokenstore()} for reuse."
+        )
+    if isinstance(exc, GarminConnectAuthenticationError):
+        return str(exc)
+    if isinstance(exc, GarminConnectConnectionError):
+        return f"Garmin connection failed: {exc}"
+    return f"Login failed: {exc}"
+
+
+def authenticate(email: str | None = None, password: str | None = None) -> Garmin:
     """
-    Authenticate with Garmin Connect.
-    Tries saved token first, then falls back to fresh login.
-    Returns the authenticated garth client.
+    Authenticate with Garmin Connect using native garminconnect token handling.
+    Reuses cached tokens when available and falls back to credential login.
     """
-    # Try resuming saved token
-    with console.status("[bold cyan]Checking saved Garmin session…"):
-        if _try_resume():
-            console.print(":white_check_mark:  Resumed saved Garmin session.")
-            return garth.client
-
-    # Fresh login required
-    console.print(":key:  Saved session not found or expired — logging in.")
     email, password = _get_credentials(email, password)
+    tokenstore = _resolve_tokenstore()
+    client = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa_code)
 
     try:
-        with console.status("[bold cyan]Logging in to Garmin Connect…"):
-            garth.login(email, password)
-    except Exception as exc:
-        console.print(f":cross_mark:  Login failed: {exc}")
+        with console.status("[bold cyan]Authenticating with Garmin Connect…"):
+            tokenstore.parent.mkdir(parents=True, exist_ok=True)
+            client.login(str(tokenstore))
+    except (
+        GarminConnectAuthenticationError,
+        GarminConnectConnectionError,
+        GarminConnectTooManyRequestsError,
+    ) as exc:
+        console.print(f":cross_mark:  {_format_auth_error(exc)}")
         raise SystemExit(1) from exc
 
-    # Persist token
-    TOKEN_DIR.mkdir(parents=True, exist_ok=True)
-    garth.save(str(TOKEN_DIR))
-    console.print(":white_check_mark:  Logged in and session saved.")
-
-    return garth.client
+    console.print(f":white_check_mark:  Garmin session ready ({tokenstore}).")
+    return client
 
 
 def get_garmin_client() -> Garmin:
     """
     Get an authenticated Garmin Connect client.
-    Handles auth and returns ready-to-use garminconnect.Garmin instance.
     """
-    authenticate()
-    client = Garmin()
-    client.garth = garth.client
-    return client
+    return authenticate()

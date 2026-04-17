@@ -70,7 +70,9 @@ text-to-garmin --save workout.json "8x 800m @ 10k effort, 90s rest"
 
 ## Garmin Authentication
 
-On first use, you'll be prompted for your Garmin Connect email and password. The OAuth token is cached in `~/.text-to-garmin/.gauth/` and is valid for approximately 1 year.
+On first use, you'll be prompted for your Garmin Connect email and password. Successful logins are cached in `~/.garminconnect/garmin_tokens.json` so future runs can reuse and refresh the session automatically.
+
+If Garmin requires MFA, the CLI will prompt for the one-time code during login.
 
 You can also set credentials via environment variables:
 ```bash
@@ -135,7 +137,7 @@ Natural language input
     → GitHub Copilot SDK (LLM parsing + Q&A)
     → Pydantic workout models (validation)
     → Garmin Connect JSON builder
-    → Upload via garminconnect library (OAuth via garth)
+    → Upload via garminconnect library (native token-based auth)
 ```
 
 ## License

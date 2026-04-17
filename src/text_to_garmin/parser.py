@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 
 from rich.console import Console
@@ -62,6 +63,7 @@ _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 
 MAX_TURNS = 10
 MAX_VALIDATION_RETRIES = 3
+DEFAULT_MODEL = os.environ.get("TEXT_TO_GARMIN_MODEL")
 
 
 def _extract_json(text: str) -> str | None:
@@ -72,29 +74,24 @@ def _extract_json(text: str) -> str | None:
     return None
 
 
+def _stringify_response_content(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_stringify_response_content(item) for item in content)
+    if isinstance(content, dict):
+        return json.dumps(content)
+    return str(content)
+
+
 async def _collect_response(session, prompt: str) -> str:
-    """Send a prompt and collect the full assistant response."""
-    done = asyncio.Event()
-    response_parts: list[str] = []
-
-    def on_event(event):
-        if event.type.value == "assistant.message_delta":
-            if event.data.delta_content:
-                response_parts.append(event.data.delta_content)
-        elif event.type.value == "assistant.message":
-            if event.data.content:
-                response_parts.append(event.data.content)
-        elif event.type.value == "session.idle":
-            done.set()
-
-    unsubscribe = session.on(on_event)
-    try:
-        await session.send({"prompt": prompt})
-        await done.wait()
-    finally:
-        unsubscribe()
-
-    return "".join(response_parts)
+    """Send a prompt and return the final assistant response text."""
+    response_event = await session.send_and_wait(prompt, timeout=120.0)
+    if response_event is None:
+        return ""
+    return _stringify_response_content(getattr(response_event.data, "content", None))
 
 
 async def _parse_response_to_workout(
@@ -138,9 +135,7 @@ async def _parse_response_to_workout(
         user_reply = input("\nYour answer: ")
         response = await _collect_response(session, user_reply)
 
-    raise RuntimeError(
-        f"Workout parsing did not complete within {MAX_TURNS} turns."
-    )
+    raise RuntimeError(f"Workout parsing did not complete within {MAX_TURNS} turns.")
 
 
 class WorkoutParserSession:
@@ -154,6 +149,7 @@ class WorkoutParserSession:
     async def __aenter__(self):
         try:
             from copilot import CopilotClient
+            from copilot.session import PermissionHandler
         except ImportError as exc:
             raise RuntimeError(
                 "GitHub Copilot SDK is not installed. "
@@ -169,10 +165,14 @@ class WorkoutParserSession:
                 "Ensure the Copilot CLI is installed and you are authenticated."
             ) from exc
 
-        self._session = await self._client.create_session({
-            "model": "gpt-4",
-            "system_message": SYSTEM_MESSAGE,
-        })
+        session_kwargs = {
+            "on_permission_request": PermissionHandler.approve_all,
+            "system_message": {"content": SYSTEM_MESSAGE},
+        }
+        if DEFAULT_MODEL:
+            session_kwargs["model"] = DEFAULT_MODEL
+
+        self._session = await self._client.create_session(**session_kwargs)
         return self
 
     async def __aexit__(self, *exc):
@@ -190,7 +190,9 @@ class WorkoutParserSession:
         )
         response = await _collect_response(self._session, initial_prompt)
         return await _parse_response_to_workout(
-            self._session, response, workout_name,
+            self._session,
+            response,
+            workout_name,
         )
 
     async def revise(self, feedback: str) -> Workout:
@@ -202,7 +204,9 @@ class WorkoutParserSession:
         )
         response = await _collect_response(self._session, prompt)
         return await _parse_response_to_workout(
-            self._session, response, self._workout_name,
+            self._session,
+            response,
+            self._workout_name,
         )
 
 

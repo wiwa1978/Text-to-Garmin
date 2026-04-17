@@ -9,7 +9,7 @@ description = "CLI tool to convert natural language workout descriptions into Ga
 requires-python = ">=3.10"
 dependencies = [
     "github-copilot-sdk",
-    "garminconnect>=0.2.30",
+    "garminconnect>=0.3.2",
     "pydantic>=2.0",
     "rich",
 ]
