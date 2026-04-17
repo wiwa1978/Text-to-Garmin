@@ -282,7 +282,32 @@ and substituted into `infra/main.parameters.json` at deploy time via
 the `${VAR=default}` placeholders. You can also edit
 `infra/main.parameters.json` directly if you prefer a checked-in config.
 
-### 3. Provision and deploy
+### 3. ⚠️ Important note — protect the app before you deploy
+
+By default the app has **no authentication**. Whoever knows the
+`*.azurecontainerapps.io` URL can open it, use the Copilot PAT you
+configured (burning *your* quota and showing up on *your* GitHub
+account), read and modify *your* Garmin Connect workouts, and see any
+other visitor's activity. Azure Container Apps hands out a public
+HTTPS endpoint by default, so "nobody will find it" is not a strategy.
+
+**If this is not desired, set `APP_PASSWORD` before running `azd up`:**
+
+```bash
+azd env set APP_PASSWORD '<choose-a-strong-password>'
+```
+
+With `APP_PASSWORD` set, the deployed URL shows a password prompt and
+every `/api/*` call without a valid session returns 401. Share the
+password only with the people you trust to use the shared Copilot PAT
+and Garmin session behind it.
+
+If you genuinely want the app open (e.g. you're running it behind
+private ingress, a VNet, or a WAF with IP allow-list), skip this step
+and leave `APP_PASSWORD` empty — the backend will log a loud warning
+on startup.
+
+### 4. Provision and deploy
 
 ```bash
 azd up
@@ -293,7 +318,7 @@ This runs three steps: **provision** (Bicep → Azure), **package**
 revision). When it finishes, `azd` prints the endpoint, something like
 `https://contoso-t2g.<region>.azurecontainerapps.io`.
 
-### 4. Configure GitHub Copilot access
+### 5. Configure GitHub Copilot access
 
 > ⚠️ **Security warning — if this URL is public, other people will use
 > your PAT.**
@@ -307,7 +332,7 @@ revision). When it finishes, `azd` prints the endpoint, something like
 > either:
 >
 > - Enable the built-in **password gate** by setting `APP_PASSWORD`
->   (see the table in step 2), **or**
+>   (see step 3), **or**
 > - Keep the URL private (don't share it, treat it like a secret), **or**
 > - Put another auth layer in front of it — e.g.
 >   [Container Apps authentication](https://learn.microsoft.com/azure/container-apps/authentication)
