@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   api,
+  type AuthStatus,
   type DraftResponse,
   type ModelInfo,
   type SetupStatus,
@@ -21,6 +22,7 @@ import {
   stageEntryFrom,
   type FlowEntry,
 } from "./components/FlowLog";
+import { LoginScreen } from "./components/LoginScreen";
 import { RecentWorkouts } from "./components/RecentWorkouts";
 import { RevisionForm } from "./components/RevisionForm";
 import { SetupScreen } from "./components/SetupScreen";
@@ -67,9 +69,27 @@ export function App() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [recentRefreshKey, setRecentRefreshKey] = useState(0);
 
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
+
   const busy = activity !== null;
 
   useEffect(() => {
+    let cancelled = false;
+    api
+      .getAuthStatus()
+      .then((a) => {
+        if (!cancelled) setAuth(a);
+      })
+      .catch((e) => {
+        if (!cancelled) setSetupError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!auth?.authenticated) return;
     let cancelled = false;
     api
       .getSetupStatus()
@@ -82,7 +102,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [auth?.authenticated]);
 
   useEffect(() => {
     if (!setup?.copilot_configured) return;
@@ -301,6 +321,18 @@ export function App() {
     );
   }
 
+  if (auth === null) {
+    return (
+      <div className="mx-auto max-w-2xl px-5 py-10">
+        <ActivityIndicator text="Loading…" />
+      </div>
+    );
+  }
+
+  if (!auth.authenticated) {
+    return <LoginScreen error={auth.error} />;
+  }
+
   if (setup === null) {
     return (
       <div className="mx-auto max-w-2xl px-5 py-10">
@@ -315,14 +347,33 @@ export function App() {
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 px-5 py-10">
-      <header className="mb-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Text to Garmin
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Describe a workout in plain English. Review the preview, then upload
-          to Garmin Connect.
-        </p>
+      <header className="mb-2 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Text to Garmin
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Describe a workout in plain English. Review the preview, then upload
+            to Garmin Connect.
+          </p>
+        </div>
+        {auth.username && !auth.dev_mode && (
+          <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
+            <span>
+              Signed in as <strong>{auth.username}</strong>
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                await api.logout();
+                setAuth({ authenticated: false });
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
+        )}
       </header>
 
       {state.kind === "error" && (

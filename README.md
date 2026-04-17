@@ -249,6 +249,10 @@ globally). Override any of them before running `azd up`:
 | Container memory               | `CONTAINER_MEMORY`                      | `containerMemory`               | e.g. `0.5Gi`, `1Gi`, `2Gi` |
 | Min / max replicas             | `CONTAINER_MIN_REPLICAS` / `CONTAINER_MAX_REPLICAS` | `minReplicas` / `maxReplicas` | `0..10` / `1..30` |
 | GitHub Copilot PAT             | `COPILOT_GITHUB_TOKEN`                  | `copilotGithubToken` (secure)   | Optional; can also be set via UI later |
+| GitHub OAuth client id         | `GITHUB_OAUTH_CLIENT_ID`                | `githubOauthClientId`           | Empty ⇒ sign-in disabled (app is open to anyone with the URL) |
+| GitHub OAuth client secret     | `GITHUB_OAUTH_CLIENT_SECRET`            | `githubOauthClientSecret` (secure) | Required if the client id is set |
+| Allowed GitHub usernames       | `ALLOWED_GITHUB_USERS`                  | `allowedGithubUsers`            | Comma-sep, e.g. `alice,bob`. Required for sign-in |
+| Session cookie secret          | `APP_SESSION_SECRET`                    | `appSessionSecret` (secure)     | Optional; auto-derived if empty |
 
 Example — fully pinned names in the `contoso` resource group:
 
@@ -283,20 +287,23 @@ revision). When it finishes, `azd` prints the endpoint, something like
 
 > ⚠️ **Security warning — if this URL is public, other people will use
 > your PAT.**
-> This app has no built-in authentication. The Copilot PAT you save
-> (via the UI or `COPILOT_GITHUB_TOKEN`) is stored on the server and
-> used for **every** request from **every** visitor — their prompts
-> are sent to GitHub Copilot as *you*, count against your Copilot
-> quota, and are attributed to your GitHub account.
+> This app has no built-in authentication *unless you enable it* (see
+> step 5 below). The Copilot PAT you save (via the UI or
+> `COPILOT_GITHUB_TOKEN`) is stored on the server and used for **every**
+> request from **every** visitor — their prompts are sent to GitHub
+> Copilot as *you*, count against your Copilot quota, and are
+> attributed to your GitHub account.
 >
 > Azure Container Apps gives the Container App a public
 > `*.azurecontainerapps.io` FQDN by default. Before pasting a token,
 > either:
 >
+> - Enable the built-in **GitHub sign-in** (step 5 — one OAuth app +
+>   three env vars, no code changes), **or**
 > - Keep the URL private (don't share it, treat it like a secret), **or**
-> - Put an auth layer in front of it — e.g. enable the built-in
+> - Put another auth layer in front of it — e.g.
 >   [Container Apps authentication](https://learn.microsoft.com/azure/container-apps/authentication)
->   (Entra ID / GitHub / Google), restrict ingress to a VNet, or sit it
+>   (Entra ID / Google), restrict ingress to a VNet, or sit it
 >   behind an Application Gateway / Front Door with WAF + IP allow-list.
 >
 > The same applies to the cached Garmin tokens on `/data` — anyone who
@@ -330,6 +337,60 @@ which needs a token. Two options:
 Garmin credentials are entered in the UI on first upload and the
 resulting session tokens are cached to `/data/garmin_tokens.json` on the
 Azure Files volume, so subsequent uploads don't need the password.
+
+### 5. (Recommended) Protect the app with GitHub sign-in
+
+The app ships with built-in GitHub OAuth. Enable it and the deployed URL
+will show a "Sign in with GitHub" screen; only users you listed in
+`ALLOWED_GITHUB_USERS` can get past it. Everyone else (and every
+unauthenticated request to `/api/*`) gets a 401.
+
+1. **Create a GitHub OAuth App** at
+   <https://github.com/settings/developers> → *OAuth Apps* → *New OAuth App*:
+   - **Application name**: anything, e.g. `text-to-garmin`.
+   - **Homepage URL**: the URL `azd up` printed, e.g.
+     `https://ca-xyz.<region>.azurecontainerapps.io`.
+   - **Authorization callback URL**:
+     `https://ca-xyz.<region>.azurecontainerapps.io/api/auth/callback`.
+   - Click *Register application*. On the next page click
+     *Generate a new client secret* and copy both values.
+2. **Tell azd about them** and who's allowed in:
+   ```bash
+   azd env set GITHUB_OAUTH_CLIENT_ID     Ov23li...
+   azd env set GITHUB_OAUTH_CLIENT_SECRET <paste-the-secret>
+   azd env set ALLOWED_GITHUB_USERS       wiwa1978,yourfriend
+   ```
+3. **Redeploy**:
+   ```bash
+   azd provision       # picks up the new secrets + env vars
+   ```
+
+Scopes requested: **none**. The app only reads your public GitHub login
+(`/user`) to check the allowlist. It cannot see your repos, emails, or
+organizations.
+
+To disable auth again, clear the client id (`azd env set
+GITHUB_OAUTH_CLIENT_ID ""`) and reprovision. When the client id is
+empty the backend logs a loud warning and accepts every request — only
+do that behind an IP restriction or private ingress.
+
+#### Local development
+
+The same env vars work locally. If `GITHUB_OAUTH_CLIENT_ID` is unset,
+auth is bypassed (`/api/auth/me` returns `{dev_mode: true}`). To test
+the sign-in flow locally:
+
+```bash
+export GITHUB_OAUTH_CLIENT_ID=Ov23li...
+export GITHUB_OAUTH_CLIENT_SECRET=...
+export ALLOWED_GITHUB_USERS=yourusername
+export APP_SESSION_SECRET=$(openssl rand -hex 32)
+export APP_BASE_URL=http://localhost:8080
+uvicorn text_to_garmin.webapi:app --port 8080
+```
+
+Register a second OAuth App with callback
+`http://localhost:8080/api/auth/callback` for this.
 
 ### Day-2 operations
 
